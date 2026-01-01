@@ -60,14 +60,15 @@ curl -fsSL -o sing-box-plus.sh https://raw.githubusercontent.com/Alvin9999-newpa
 ## 🧭 功能菜单
 
 ```text
- 🚀 Sing-Box-Plus 管理脚本 v2.4.6 🚀
+ 🚀 Sing-Box-Plus 管理脚本 v2.4.7 🚀
  脚本更新地址: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 =============================================================
 系统加速状态：已启用 / 未启用 BBR
 Sing-Box 启动状态：运行中 / 未运行 / 未安装
 =============================================================
   1) 安装/部署（18 节点）
-  2) 查看分享链接
+  2) 查看分享链接（IPv4）
+  6) 查看分享链接（IPv6）
   3) 重启服务
   4) 一键更换所有端口
   5) 一键开启 BBR
