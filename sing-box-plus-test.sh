@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
 #  Sing-Box-Plus 管理脚本（18 节点：直连 9 + WARP 9）
-#  Version: v2.4.7
+#  Version: v3.0.0
 #  author：Alvin9999
-#  Repo: https://github.com/Alvin9999/Sing-Box-Plus
+#  Repo: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 # ============================================================
 
 set -Eeuo pipefail
@@ -274,6 +274,10 @@ WGCF_DIR=${WGCF_DIR:-$SB_DIR/wgcf}
 
 # 功能开关（保持稳定默认）
 ENABLE_WARP=${ENABLE_WARP:-true}
+# WARP 后端：强制使用官方 warp-cli（proxy 模式，sing-box 走本地 SOCKS5）
+WARP_BACKEND=${WARP_BACKEND:-warp-cli}
+WARP_SOCKS_HOST=${WARP_SOCKS_HOST:-127.0.0.1}
+WARP_SOCKS_PORT=${WARP_SOCKS_PORT:-40000}
 ENABLE_VLESS_REALITY=${ENABLE_VLESS_REALITY:-true}
 ENABLE_VLESS_GRPCR=${ENABLE_VLESS_GRPCR:-true}
 ENABLE_TROJAN_REALITY=${ENABLE_TROJAN_REALITY:-true}
@@ -286,7 +290,7 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
-SCRIPT_VERSION="v2.4.7"
+SCRIPT_VERSION="v33.0.0"
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
 REALITY_SERVER_PORT=${REALITY_SERVER_PORT:-443}
 GRPC_SERVICE=${GRPC_SERVICE:-grpc}
@@ -558,6 +562,66 @@ ensure_creds(){
   save_creds
 }
 
+
+# ===== WARP（官方 warp-cli，proxy 模式）=====
+install_warpcli(){
+  command -v warp-cli >/dev/null 2>&1 && return 0
+
+  if command -v apt-get >/dev/null 2>&1; then
+    ensure_deps curl gpg lsb_release || true
+    # GPG key
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    # repo
+    local codename
+    codename="$(lsb_release -cs 2>/dev/null || echo focal)"
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${codename} main" \
+      > /etc/apt/sources.list.d/cloudflare-client.list
+    apt-get update -y
+    apt-get install -y cloudflare-warp
+  elif command -v dnf >/dev/null 2>&1; then
+    curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo
+    dnf install -y cloudflare-warp
+  elif command -v yum >/dev/null 2>&1; then
+    curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo
+    yum install -y cloudflare-warp
+  else
+    warn "未识别的包管理器，无法自动安装 cloudflare-warp（warp-cli）"
+    return 1
+  fi
+
+  command -v warp-cli >/dev/null 2>&1
+}
+
+ensure_warpcli_proxy(){
+  [[ "${ENABLE_WARP:-true}" == "true" ]] || return 0
+
+  install_warpcli || { warn "warp-cli 安装失败，禁用 WARP 节点"; ENABLE_WARP=false; save_env; return 0; }
+
+  systemctl enable --now warp-svc >/dev/null 2>&1 || true
+
+  # 已注册就跳过（避免重复交互）
+  warp-cli registration show >/dev/null 2>&1 || {
+    info "开始注册 WARP（会提示接受服务条款，输入 y）"
+    warp-cli registration new || { warn "WARP 注册失败，禁用 WARP 节点"; ENABLE_WARP=false; save_env; return 0; }
+  }
+
+  # 关键：proxy 模式（不会改系统默认路由）
+  warp-cli mode proxy >/dev/null 2>&1 || true
+
+  # 尝试设置代理端口（不同版本命令可能不同，失败则使用默认 40000）
+  warp-cli proxy port "${WARP_SOCKS_PORT}" >/dev/null 2>&1 || true
+
+  warp-cli connect >/dev/null 2>&1 || true
+
+  # 健康检查：本机 socks5 是否可用（失败不直接退出，但会提示）
+  if curl -fsSL --proxy "socks5://${WARP_SOCKS_HOST}:${WARP_SOCKS_PORT}" https://cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q "warp=on"; then
+    info "WARP 代理已就绪：socks5://${WARP_SOCKS_HOST}:${WARP_SOCKS_PORT}"
+  else
+    warn "WARP 代理检测未通过（仍会继续部署）。可手动运行：warp-cli status / systemctl status warp-svc"
+  fi
+}
+
+
 # ===== WARP（wgcf） =====
 WGCF_BIN=/usr/local/bin/wgcf
 install_wgcf(){
@@ -718,7 +782,8 @@ install_singbox() {
 write_systemd(){ cat > "/etc/systemd/system/${SYSTEMD_SERVICE}" <<EOF
 [Unit]
 Description=Sing-Box (Native 18 nodes)
-After=network-online.target
+After=network-online.target warp-svc.service
+Wants=network-online.target warp-svc.service
 Requires=network-online.target
 
 [Service]
@@ -758,6 +823,7 @@ write_config(){
   --argjson PW4 "$PORT_HY2_W" --argjson PW5 "$PORT_VMESS_WS_W" --argjson PW6 "$PORT_HY2_OBFS_W" \
   --argjson PW7 "$PORT_SS2022_W" --argjson PW8 "$PORT_SS_W" --argjson PW9 "$PORT_TUIC_W" \
   --arg ENABLE_WARP "$ENABLE_WARP" \
+    --arg WSHOST "$WARP_SOCKS_HOST" --argjson WSPORT "$WARP_SOCKS_PORT" \
   --arg WPRIV "${WARP_PRIVATE_KEY:-}" --arg WPPUB "${WARP_PEER_PUBLIC_KEY:-}" \
   --arg WHOST "${WARP_ENDPOINT_HOST:-}" --argjson WPORT "${WARP_ENDPOINT_PORT:-0}" \
   --arg W4 "${WARP_ADDRESS_V4:-}" --arg W6 "${WARP_ADDRESS_V6:-}" \
@@ -774,17 +840,7 @@ write_config(){
   def inbound_tuic($port): {type:"tuic", listen:"::", listen_port:$port, users:[{uuid:$TUICUUID, password:$TUICPWD}], congestion_control:"bbr", tls:{enabled:true, certificate_path:$CRT, key_path:$KEY, alpn:["h3"]}};
 
   def warp_outbound:
-    {type:"wireguard", tag:"warp",
-      local_address: ( [ $W4, $W6 ] | map(select(. != "")) ),
-      system_interface: false,
-      private_key:$WPRIV,
-      peers: [ {
-        server:$WHOST, server_port:$WPORT, public_key:$WPPUB,
-        reserved: [ $WR1, $WR2, $WR3 ],
-        allowed_ips: ["0.0.0.0/0","::/0"]
-      } ],
-      mtu:1280
-    };
+    {type:"socks", tag:"warp", server:$WSHOST, server_port:$WSPORT};
 
   {
     log:{level:"info", timestamp:true},
@@ -811,14 +867,14 @@ write_config(){
       (inbound_tuic($PW9) + {tag:"tuic-v5-warp"})
     ],
     outbounds: (
-      if $ENABLE_WARP=="true" and ($WPRIV|length)>0 and ($WHOST|length)>0 then
+      if $ENABLE_WARP=="true" then
         [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}, warp_outbound]
       else
         [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}]
       end
     ),
     route: (
-      if $ENABLE_WARP=="true" and ($WPRIV|length)>0 and ($WHOST|length)>0 then
+      if $ENABLE_WARP=="true" then
         { default_domain_resolver:"dns-remote", rules:[
             { inbound: ["vless-reality-warp","vless-grpcr-warp","trojan-reality-warp","hy2-warp","vmess-ws-warp","hy2-obfs-warp","ss2022-warp","ss-warp","tuic-v5-warp"], outbound:"warp" }
           ],
@@ -938,7 +994,7 @@ banner(){
   clear >/dev/null 2>&1 || true
   hr
   echo -e " ${C_CYAN}🚀 ${SCRIPT_NAME} ${SCRIPT_VERSION} 🚀${C_RESET}"
-  echo -e "${C_CYAN} 脚本更新地址: https://github.com/Alvin9999/Sing-Box-Plus${C_RESET}"
+  echo -e "${C_CYAN} 脚本更新地址: https://github.com/Alvin9999-newpac/Sing-Box-Plus${C_RESET}"
 
   hr
   echo -e "系统加速状态：$(bbr_state)"
