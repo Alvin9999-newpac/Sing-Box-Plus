@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  Sing-Box-Plus 管理脚本（18 节点：直连 9 + WARP 9）
-#  Version: v3.1.2
+#  Version: v3.1.3
 #  author：Alvin9999
 #  Repo: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 # ============================================================
@@ -286,7 +286,7 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
-SCRIPT_VERSION="v3.1.2"
+SCRIPT_VERSION="v3.1.3"
 # WARP 首次注册提示是否已显示（防止重复提示）
 WARP_REG_NOTICE_SHOWN=0
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
@@ -869,7 +869,13 @@ write_config(){
 
   {
     log:{level:"info", timestamp:true},
-    dns:{ servers:[ {tag:"dns-remote", address:"https://1.1.1.1/dns-query", detour:"direct"}, {address:"tls://dns.google", detour:"direct"} ], strategy:"prefer_ipv4" },
+   dns:{
+  servers:[
+    {tag:"dns-remote", address:"https://1.1.1.1/dns-query", detour:"direct"},
+    {address:"tls://dns.google", detour:"direct"}
+  ],
+  strategy:"prefer_ipv6"
+},},
     inbounds:[
       (inbound_vless_flow($P1) + {tag:"vless-reality"}),
       (inbound_vless($P2) + {tag:"vless-grpcr", transport:{type:"grpc", service_name:$GRPC}}),
