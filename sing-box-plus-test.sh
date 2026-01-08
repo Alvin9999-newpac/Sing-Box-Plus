@@ -897,24 +897,24 @@ write_config(){
       (inbound_ss($PW8) + {tag:"ss-warp"}),
       (inbound_tuic($PW9) + {tag:"tuic-v5-warp"})
     ],
-    outbounds: (
-      if $ENABLE_WARP=="true" and ($WPRIV|length)>0 and ($WHOST|length)>0 then
-        [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}, warp_outbound]
-      else
-        [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}]
-      end
-    ),
-    route: (
-      if $ENABLE_WARP=="true" and ($WPRIV|length)>0 and ($WHOST|length)>0 then
-        { default_domain_resolver:"dns-remote", rules:[
-            { inbound: ["vless-reality-warp","vless-grpcr-warp","trojan-reality-warp","hy2-warp","vmess-ws-warp","hy2-obfs-warp","ss2022-warp","ss-warp","tuic-v5-warp"], outbound:"warp" }
-          ],
-          final:"direct"
-        }
-      else
-        { final:"direct" }
-      end
-    )
+outbounds: (
+  if $ENABLE_WARP=="true" then
+    [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}, warp_outbound]
+  else
+    [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}]
+  end
+),
+route: (
+  if $ENABLE_WARP=="true" then
+    { default_domain_resolver:"dns-remote", rules:[
+        { inbound: ["vless-reality-warp","vless-grpcr-warp","trojan-reality-warp","hy2-warp","vmess-ws-warp","hy2-obfs-warp","ss2022-warp","ss-warp","tuic-v5-warp"], outbound:"warp" }
+      ],
+      final:"direct"
+    }
+  else
+    { final:"direct" }
+  end
+)
   }' > "$CONF_JSON"
   save_env
 }
