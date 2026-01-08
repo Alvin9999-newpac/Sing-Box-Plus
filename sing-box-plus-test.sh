@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  Sing-Box-Plus 管理脚本（18 节点：直连 9 + WARP 9）
-#  Version: v3.1.6
+#  Version: v3.1.0
 #  author：Alvin9999
 #  Repo: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 # ============================================================
@@ -286,9 +286,7 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
-SCRIPT_VERSION="v3.1.6"
-# WARP 首次注册提示是否已显示（防止重复提示）
-WARP_REG_NOTICE_SHOWN=0
+SCRIPT_VERSION="v3.1.1"
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
 REALITY_SERVER_PORT=${REALITY_SERVER_PORT:-443}
 GRPC_SERVICE=${GRPC_SERVICE:-grpc}
@@ -384,12 +382,6 @@ get_ip6(){ # 多源获取公网 IPv6（无 IPv6 则返回空）
   [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ifconfig.me 2>/dev/null || true)
   [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ip.sb 2>/dev/null || true)
   echo "${ip:-}"
-}
-
-
-ipv6_egress_ok(){
-  # 检测 IPv6 出站是否可用（用于 DNS 策略自适应）
-  curl -6 -fsS --connect-timeout 3 https://cloudflare.com/cdn-cgi/trace >/dev/null 2>&1
 }
 
 # 兼容旧调用：默认返回 IPv4
@@ -643,13 +635,10 @@ ensure_warpcli_proxy(){
   systemctl enable --now warp-svc >/dev/null 2>&1 || true
 
   # 已注册则跳过；未注册则自动同意条款
-   warp-cli registration show >/dev/null 2>&1 || {
-    if [[ "$WARP_REG_NOTICE_SHOWN" -eq 0 ]]; then
-        info "正在初始化 Cloudflare WARP（首次使用需同意服务条款）"
-        WARP_REG_NOTICE_SHOWN=1
-    fi
+  warp-cli registration show >/dev/null 2>&1 || {
+    info "WARP 首次注册需要接受条款，自动输入 y ..."
     yes y | warp-cli registration new >/dev/null 2>&1 || return 1
-}
+  }
 
   # proxy 模式：不改系统默认路由
   warp-cli mode proxy >/dev/null 2>&1 || true
@@ -839,9 +828,6 @@ write_config(){
   ensure_creds; save_all_ports; mk_cert
   [[ "$ENABLE_WARP" == "true" && "${SKIP_WARP_SETUP:-0}" != "1" ]] && ensure_warpcli_proxy
 
-  local DNS_STRATEGY="prefer_ipv4"
-  ipv6_egress_ok && DNS_STRATEGY="prefer_ipv6"
-
   local CRT="$CERT_DIR/fullchain.pem" KEY="$CERT_DIR/key.pem"
   jq -n \
   --arg RS "$REALITY_SERVER" --argjson RSP "${REALITY_SERVER_PORT:-443}" --arg UID "$UUID" \
@@ -857,7 +843,10 @@ write_config(){
   --argjson PW4 "$PORT_HY2_W" --argjson PW5 "$PORT_VMESS_WS_W" --argjson PW6 "$PORT_HY2_OBFS_W" \
   --argjson PW7 "$PORT_SS2022_W" --argjson PW8 "$PORT_SS_W" --argjson PW9 "$PORT_TUIC_W" \
   --arg ENABLE_WARP "$ENABLE_WARP" \
-  --arg DNS_STRATEGY "$DNS_STRATEGY" \
+  --arg WPRIV "${WARP_PRIVATE_KEY:-}" --arg WPPUB "${WARP_PEER_PUBLIC_KEY:-}" \
+  --arg WHOST "${WARP_ENDPOINT_HOST:-}" --argjson WPORT "${WARP_ENDPOINT_PORT:-0}" \
+  --arg W4 "${WARP_ADDRESS_V4:-}" --arg W6 "${WARP_ADDRESS_V6:-}" \
+  --argjson WR1 "${WARP_RESERVED_1:-0}" --argjson WR2 "${WARP_RESERVED_2:-0}" --argjson WR3 "${WARP_RESERVED_3:-0}" \
   '
   def inbound_vless($port): {type:"vless", listen:"::", listen_port:$port, users:[{uuid:$UID}], tls:{enabled:true, server_name:$RS, reality:{enabled:true, handshake:{server:$RS, server_port:$RSP}, private_key:$RPR, short_id:[$SID]}}};
   def inbound_vless_flow($port): {type:"vless", listen:"::", listen_port:$port, users:[{uuid:$UID, flow:"xtls-rprx-vision"}], tls:{enabled:true, server_name:$RS, reality:{enabled:true, handshake:{server:$RS, server_port:$RSP}, private_key:$RPR, short_id:[$SID]}}};
@@ -875,13 +864,7 @@ write_config(){
 
   {
     log:{level:"info", timestamp:true},
-   dns:{
-  servers:[
-    {tag:"dns-remote", address:"https://1.1.1.1/dns-query", detour:"direct"},
-    {address:"tls://dns.google", detour:"direct"}
-  ],
-  strategy:$DNS_STRATEGY
-},
+    dns:{ servers:[ {tag:"dns-remote", address:"https://1.1.1.1/dns-query", detour:"direct"}, {address:"tls://dns.google", detour:"direct"} ], strategy:"prefer_ipv4" },
     inbounds:[
       (inbound_vless_flow($P1) + {tag:"vless-reality"}),
       (inbound_vless($P2) + {tag:"vless-grpcr", transport:{type:"grpc", service_name:$GRPC}}),
@@ -903,24 +886,24 @@ write_config(){
       (inbound_ss($PW8) + {tag:"ss-warp"}),
       (inbound_tuic($PW9) + {tag:"tuic-v5-warp"})
     ],
-outbounds: (
-  if $ENABLE_WARP=="true" then
-    [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}, warp_outbound]
-  else
-    [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}]
-  end
-),
-route: (
-  if $ENABLE_WARP=="true" then
-    { default_domain_resolver:"dns-remote", rules:[
-        { inbound: ["vless-reality-warp","vless-grpcr-warp","trojan-reality-warp","hy2-warp","vmess-ws-warp","hy2-obfs-warp","ss2022-warp","ss-warp","tuic-v5-warp"], outbound:"warp" }
-      ],
-      final:"direct"
-    }
-  else
-    { final:"direct" }
-  end
-)
+    outbounds: (
+      if $ENABLE_WARP=="true" and ($WPRIV|length)>0 and ($WHOST|length)>0 then
+        [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}, warp_outbound]
+      else
+        [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}]
+      end
+    ),
+    route: (
+      if $ENABLE_WARP=="true" and ($WPRIV|length)>0 and ($WHOST|length)>0 then
+        { default_domain_resolver:"dns-remote", rules:[
+            { inbound: ["vless-reality-warp","vless-grpcr-warp","trojan-reality-warp","hy2-warp","vmess-ws-warp","hy2-obfs-warp","ss2022-warp","ss-warp","tuic-v5-warp"], outbound:"warp" }
+          ],
+          final:"direct"
+        }
+      else
+        { final:"direct" }
+      end
+    )
   }' > "$CONF_JSON"
   save_env
 }
