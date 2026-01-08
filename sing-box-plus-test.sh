@@ -382,7 +382,6 @@ get_ip6(){ # 多源获取公网 IPv6（无 IPv6 则返回空）
   [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ifconfig.me 2>/dev/null || true)
   [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ip.sb 2>/dev/null || true)
   echo "${ip:-}"
-}"
 }
 
 # 兼容旧调用：默认返回 IPv4
