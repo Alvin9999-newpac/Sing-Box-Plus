@@ -286,7 +286,7 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
-SCRIPT_VERSION="v3.1.0"
+SCRIPT_VERSION="v3.1.1"
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
 REALITY_SERVER_PORT=${REALITY_SERVER_PORT:-443}
 GRPC_SERVICE=${GRPC_SERVICE:-grpc}
@@ -375,10 +375,14 @@ get_ip4(){ # 多源获取公网 IPv4
 
 get_ip6(){ # 多源获取公网 IPv6（无 IPv6 则返回空）
   local ip
-  ip=$(curl -6 -fsSL ipv6.icanhazip.com 2>/dev/null || true)
+  # 优先从本机接口取（避免 curl -6 在部分机房/系统下失败）
+  ip=$(ip -6 addr show scope global 2>/dev/null | awk '/inet6/{print $2}' | cut -d/ -f1 | head -n1 || true)
+  # 再尝试外部探测
+  [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ipv6.icanhazip.com 2>/dev/null || true)
   [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ifconfig.me 2>/dev/null || true)
   [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ip.sb 2>/dev/null || true)
   echo "${ip:-}"
+}"
 }
 
 # 兼容旧调用：默认返回 IPv4
@@ -823,7 +827,7 @@ systemctl enable "${SYSTEMD_SERVICE}" >/dev/null 2>&1 || true
 write_config(){
   ensure_dirs; load_env || true; load_creds || true; load_ports || true
   ensure_creds; save_all_ports; mk_cert
-  [[ "$ENABLE_WARP" == "true" ]] && ensure_warpcli_proxy
+  [[ "$ENABLE_WARP" == "true" && "${SKIP_WARP_SETUP:-0}" != "1" ]] && ensure_warpcli_proxy
 
   local CRT="$CERT_DIR/fullchain.pem" KEY="$CERT_DIR/key.pem"
   jq -n \
@@ -1046,7 +1050,7 @@ rotate_ports(){
   PORT_HY2_OBFS_W=""; PORT_SS2022_W=""; PORT_SS_W=""; PORT_TUIC_W=""
 
   save_all_ports          # 重新生成并保存 18 个不重复端口
-  write_config            # 用新端口重写 /opt/sing-box/config.json
+  SKIP_WARP_SETUP=1 write_config   # 用新端口重写 /opt/sing-box/config.json（不触发 WARP 注册/连接）
   open_firewall           # ★ 新增：把“当前配置中的端口”全部放行
   systemctl restart "${SYSTEMD_SERVICE}"
 
@@ -1108,9 +1112,9 @@ menu(){
   print_links_grouped
   exit 0                                          # ← 打印后直接退出
   ;;
-  2) if ensure_installed_or_hint; then print_links_grouped 4; exit 0; fi ;;
+  2) if ensure_installed_or_hint; then print_links_grouped 4; read -rp "回车返回..." _ || true; menu; fi ;;
 
-  6) if ensure_installed_or_hint; then print_links_grouped 6; exit 0; fi ;;
+  6) if ensure_installed_or_hint; then print_links_grouped 6; read -rp "回车返回..." _ || true; menu; fi ;;
     3) if ensure_installed_or_hint; then restart_service; fi; read -rp "回车返回..." _ || true; menu ;;
    4) if ensure_installed_or_hint; then rotate_ports; fi; menu ;;
     5) enable_bbr; read -rp "回车返回..." _ || true; menu ;;
