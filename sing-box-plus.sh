@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  Sing-Box-Plus 管理脚本（18 节点：直连 9 + WARP 9）
-#  Version: v2.4.7
+#  Version: v3.2.0
 #  author：Alvin9999
 #  Repo: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 # ============================================================
@@ -286,7 +286,7 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
-SCRIPT_VERSION="v2.4.7"
+SCRIPT_VERSION="v3.2.0"
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
 REALITY_SERVER_PORT=${REALITY_SERVER_PORT:-443}
 GRPC_SERVICE=${GRPC_SERVICE:-grpc}
@@ -560,7 +560,7 @@ ensure_creds(){
 
 # ===== WARP（wgcf） =====
 WGCF_BIN=/usr/local/bin/wgcf
-install_wgcf(){
+install_wgcf_disabled(){
   [[ -x "$WGCF_BIN" ]] && return 0
   local GOA url tmp
   case "$(arch_map)" in
@@ -590,8 +590,88 @@ pad_b64(){
 }
 
 
-# ===== WARP（wgcf）配置生成/修复 =====
-ensure_warp_profile(){
+# ===== WARP（官方 warp-cli，proxy 模式）一键安装/修复 =====
+# 说明：
+# - 本脚本强制使用官方 cloudflare-warp (warp-cli) 提供本地 SOCKS5 (默认 127.0.0.1:40000)
+# - sing-box 的 tag=warp 出站固定走该 SOCKS5
+WARP_SOCKS_HOST="${WARP_SOCKS_HOST:-127.0.0.1}"
+WARP_SOCKS_PORT="${WARP_SOCKS_PORT:-40000}"
+
+install_warpcli(){
+  command -v warp-cli >/dev/null 2>&1 && return 0
+
+  if command -v apt-get >/dev/null 2>&1; then
+    info "安装 cloudflare-warp (Debian/Ubuntu)..."
+    apt-get update -y
+    apt-get install -y curl gpg lsb-release ca-certificates >/dev/null 2>&1 || true
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main"       > /etc/apt/sources.list.d/cloudflare-client.list
+    apt-get update -y
+    apt-get install -y cloudflare-warp
+  elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+    info "安装 cloudflare-warp (CentOS/RHEL)..."
+    curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo >/dev/null
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y cloudflare-warp
+    else
+      yum install -y cloudflare-warp
+    fi
+  else
+    err "未识别的包管理器，无法自动安装 cloudflare-warp"
+    return 1
+  fi
+
+  command -v warp-cli >/dev/null 2>&1
+}
+
+ensure_warpcli_proxy(){
+  [[ "${ENABLE_WARP:-true}" == "true" ]] || return 0
+
+  install_warpcli || return 1
+
+  systemctl enable --now warp-svc >/dev/null 2>&1 || true
+
+  # 已注册则跳过；未注册则自动同意条款
+  warp-cli registration show >/dev/null 2>&1 || {
+    info "WARP 首次注册需要接受条款，自动输入 y ..."
+    yes y | warp-cli registration new >/dev/null 2>&1 || return 1
+  }
+
+  # proxy 模式：不改系统默认路由
+  warp-cli mode proxy >/dev/null 2>&1 || true
+
+  # 连接
+  warp-cli connect >/dev/null 2>&1 || return 1
+
+  # 等待 socks 端口监听
+  for i in {1..12}; do
+    if ss -lntp 2>/dev/null | grep -q ":${WARP_SOCKS_PORT}\b" || netstat -lntp 2>/dev/null | grep -q ":${WARP_SOCKS_PORT}\b"; then
+      break
+    fi
+    sleep 1
+  done
+
+  if !( ss -lntp 2>/dev/null | grep -q ":${WARP_SOCKS_PORT}\b" || netstat -lntp 2>/dev/null | grep -q ":${WARP_SOCKS_PORT}\b" ); then
+    err "WARP SOCKS5 端口 ${WARP_SOCKS_PORT} 未监听（warp-svc/warp-cli 可能未正常工作）"
+    systemctl status warp-svc --no-pager | head -80 || true
+    journalctl -u warp-svc -n 120 --no-pager || true
+    return 1
+  fi
+
+  # 真正测试 warp=on
+  if ! curl -fsSL --proxy "socks5://${WARP_SOCKS_HOST}:${WARP_SOCKS_PORT}" https://cloudflare.com/cdn-cgi/trace | grep -q "warp=on"; then
+    err "WARP 代理测试失败：未检测到 warp=on"
+    warp-cli status || true
+    return 1
+  fi
+
+  ok "WARP proxy 已就绪：socks5://${WARP_SOCKS_HOST}:${WARP_SOCKS_PORT}"
+  return 0
+}
+
+# ===== WARP（wgcf）配置生成/修复（已废弃/不再默认使用，保留旧代码以兼容历史） =====
+
+ensure_wgcf_profile(){
   [[ "${ENABLE_WARP:-true}" == "true" ]] || return 0
 
   # 先尝试读取旧 env，并做一次规范化补齐
@@ -608,7 +688,7 @@ ensure_warp_profile(){
   fi
 
   # 走到这里说明旧 env 不完整；开始用 wgcf 重建
-  install_wgcf || { warn "wgcf 安装失败，禁用 WARP 节点"; ENABLE_WARP=false; save_env; return 0; }
+  install_wgcf_disabled || { warn "wgcf 安装失败，禁用 WARP 节点"; ENABLE_WARP=false; save_env; return 0; }
 
   local wd="$SB_DIR/wgcf"; mkdir -p "$wd"
   if [[ ! -f "$wd/wgcf-account.toml" ]]; then
@@ -718,7 +798,8 @@ install_singbox() {
 write_systemd(){ cat > "/etc/systemd/system/${SYSTEMD_SERVICE}" <<EOF
 [Unit]
 Description=Sing-Box (Native 18 nodes)
-After=network-online.target
+After=network-online.target warp-svc.service
+Wants=network-online.target warp-svc.service
 Requires=network-online.target
 
 [Service]
@@ -742,11 +823,12 @@ systemctl enable "${SYSTEMD_SERVICE}" >/dev/null 2>&1 || true
 write_config(){
   ensure_dirs; load_env || true; load_creds || true; load_ports || true
   ensure_creds; save_all_ports; mk_cert
-  [[ "$ENABLE_WARP" == "true" ]] && ensure_warp_profile || true
+  [[ "$ENABLE_WARP" == "true" ]] && ensure_warpcli_proxy
 
   local CRT="$CERT_DIR/fullchain.pem" KEY="$CERT_DIR/key.pem"
   jq -n \
   --arg RS "$REALITY_SERVER" --argjson RSP "${REALITY_SERVER_PORT:-443}" --arg UID "$UUID" \
+  --arg WSHOST "$WARP_SOCKS_HOST" --argjson WSPORT "$WARP_SOCKS_PORT" \
   --arg RPR "$REALITY_PRIV" --arg RPB "$REALITY_PUB" --arg SID "$REALITY_SID" \
   --arg HY2 "$HY2_PWD" --arg HY22 "$HY2_PWD2" --arg HY2O "$HY2_OBFS_PWD" \
   --arg GRPC "$GRPC_SERVICE" --arg VMWS "$VMESS_WS_PATH" --arg CRT "$CRT" --arg KEY "$KEY" \
@@ -774,17 +856,8 @@ write_config(){
   def inbound_tuic($port): {type:"tuic", listen:"::", listen_port:$port, users:[{uuid:$TUICUUID, password:$TUICPWD}], congestion_control:"bbr", tls:{enabled:true, certificate_path:$CRT, key_path:$KEY, alpn:["h3"]}};
 
   def warp_outbound:
-    {type:"wireguard", tag:"warp",
-      local_address: ( [ $W4, $W6 ] | map(select(. != "")) ),
-      system_interface: false,
-      private_key:$WPRIV,
-      peers: [ {
-        server:$WHOST, server_port:$WPORT, public_key:$WPPUB,
-        reserved: [ $WR1, $WR2, $WR3 ],
-        allowed_ips: ["0.0.0.0/0","::/0"]
-      } ],
-      mtu:1280
-    };
+    {type:"socks", tag:"warp", server:$WSHOST, server_port:$WSPORT};
+
 
   {
     log:{level:"info", timestamp:true},
@@ -841,17 +914,41 @@ open_firewall(){
   rules+=("${PORT_VLESSR_W}/tcp" "${PORT_VLESS_GRPCR_W}/tcp" "${PORT_TROJANR_W}/tcp" "${PORT_VMESS_WS_W}/tcp")
   rules+=("${PORT_HY2_W}/udp" "${PORT_HY2_OBFS_W}/udp" "${PORT_TUIC_W}/udp")
   rules+=("${PORT_SS2022_W}/tcp" "${PORT_SS2022_W}/udp" "${PORT_SS_W}/tcp" "${PORT_SS_W}/udp")
+
   if command -v ufw >/dev/null 2>&1 && ufw status | grep -q -E "active|活跃"; then
-    for r in "${rules[@]}"; do ufw allow "$r" >/dev/null 2>&1 || true; done; ufw reload >/dev/null 2>&1 || true
+    for r in "${rules[@]}"; do ufw allow "$r" >/dev/null 2>&1 || true; done
+    ufw reload >/dev/null 2>&1 || true
+
   elif command -v firewall-cmd >/dev/null 2>&1 && firewall-cmd --state >/dev/null 2>&1; then
     systemctl enable --now firewalld >/dev/null 2>&1 || true
-    for r in "${rules[@]}"; do firewall-cmd --permanent --add-port="$r" >/dev/null 2>&1 || true; done; firewall-cmd --reload >/dev/null 2>&1 || true
+    for r in "${rules[@]}"; do firewall-cmd --permanent --add-port="$r" >/dev/null 2>&1 || true; done
+    firewall-cmd --reload >/dev/null 2>&1 || true
+
   else
     local p proto
-    for r in "${rules[@]}"; do p="${r%/*}"; proto="${r#*/}";
-      if [[ "$proto" == tcp ]]; then iptables -C INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$p" -j ACCEPT; fi
-      if [[ "$proto" == udp ]]; then iptables -C INPUT -p udp --dport "$p" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$p" -j ACCEPT; fi
+    for r in "${rules[@]}"; do
+      p="${r%/*}"; proto="${r#*/}"
+
+      # IPv4
+      if [[ "$proto" == tcp ]]; then
+        iptables -C INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null || iptables -I INPUT -p tcp --dport "$p" -j ACCEPT
+      fi
+      if [[ "$proto" == udp ]]; then
+        iptables -C INPUT -p udp --dport "$p" -j ACCEPT 2>/dev/null || iptables -I INPUT -p udp --dport "$p" -j ACCEPT
+      fi
+
+      # IPv6（关键补全）
+      if command -v ip6tables >/dev/null 2>&1; then
+        if [[ "$proto" == tcp ]]; then
+          ip6tables -C INPUT -p tcp --dport "$p" -j ACCEPT 2>/dev/null || ip6tables -I INPUT -p tcp --dport "$p" -j ACCEPT
+        fi
+        if [[ "$proto" == udp ]]; then
+          ip6tables -C INPUT -p udp --dport "$p" -j ACCEPT 2>/dev/null || ip6tables -I INPUT -p udp --dport "$p" -j ACCEPT
+        fi
+      fi
     done
+
+    # 保存（netfilter-persistent 通常会把 v4/v6 一起保存）
     command -v netfilter-persistent >/dev/null 2>&1 && netfilter-persistent save >/dev/null 2>&1 || true
   fi
 }
@@ -1026,7 +1123,7 @@ menu(){
   set +e                                            # ← 关闭严格退出，避免中途被杀掉
   echo -e "${C_BLUE}[信息] 正在检查 sing-box 安装状态...${C_RESET}"
   install_singbox            || true
-  ensure_warp_profile        || true
+  ensure_warpcli_proxy        || true
   write_config               || { echo "[ERR] 生成配置失败"; }
   write_systemd              || true
   open_firewall              || true
