@@ -875,7 +875,7 @@ write_config(){
     {address:"tls://dns.google", detour:"direct"}
   ],
   strategy:"prefer_ipv6"
-},},
+},
     inbounds:[
       (inbound_vless_flow($P1) + {tag:"vless-reality"}),
       (inbound_vless($P2) + {tag:"vless-grpcr", transport:{type:"grpc", service_name:$GRPC}}),
