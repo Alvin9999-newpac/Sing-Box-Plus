@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  Sing-Box-Plus 管理脚本（18 节点：直连 9 + WARP 9）
-#  Version: v3.1.4
+#  Version: v3.1.5
 #  author：Alvin9999
 #  Repo: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 # ============================================================
@@ -286,7 +286,7 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
-SCRIPT_VERSION="v3.1.4"
+SCRIPT_VERSION="v3.1.5"
 # WARP 首次注册提示是否已显示（防止重复提示）
 WARP_REG_NOTICE_SHOWN=0
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
@@ -384,6 +384,12 @@ get_ip6(){ # 多源获取公网 IPv6（无 IPv6 则返回空）
   [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ifconfig.me 2>/dev/null || true)
   [[ -z "$ip" ]] && ip=$(curl -6 -fsSL ip.sb 2>/dev/null || true)
   echo "${ip:-}"
+}
+
+
+ipv6_egress_ok(){
+  # 检测 IPv6 出站是否可用（用于 DNS 策略自适应）
+  curl -6 -fsS --connect-timeout 3 https://cloudflare.com/cdn-cgi/trace >/dev/null 2>&1
 }
 
 # 兼容旧调用：默认返回 IPv4
@@ -833,6 +839,9 @@ write_config(){
   ensure_creds; save_all_ports; mk_cert
   [[ "$ENABLE_WARP" == "true" && "${SKIP_WARP_SETUP:-0}" != "1" ]] && ensure_warpcli_proxy
 
+  local DNS_STRATEGY="prefer_ipv4"
+  ipv6_egress_ok && DNS_STRATEGY="prefer_ipv6"
+
   local CRT="$CERT_DIR/fullchain.pem" KEY="$CERT_DIR/key.pem"
   jq -n \
   --arg RS "$REALITY_SERVER" --argjson RSP "${REALITY_SERVER_PORT:-443}" --arg UID "$UUID" \
@@ -848,6 +857,8 @@ write_config(){
   --argjson PW4 "$PORT_HY2_W" --argjson PW5 "$PORT_VMESS_WS_W" --argjson PW6 "$PORT_HY2_OBFS_W" \
   --argjson PW7 "$PORT_SS2022_W" --argjson PW8 "$PORT_SS_W" --argjson PW9 "$PORT_TUIC_W" \
   --arg ENABLE_WARP "$ENABLE_WARP" \
+  --arg DNS_STRATEGY "$DNS_STRATEGY" \
+
   --arg WPRIV "${WARP_PRIVATE_KEY:-}" --arg WPPUB "${WARP_PEER_PUBLIC_KEY:-}" \
   --arg WHOST "${WARP_ENDPOINT_HOST:-}" --argjson WPORT "${WARP_ENDPOINT_PORT:-0}" \
   --arg W4 "${WARP_ADDRESS_V4:-}" --arg W6 "${WARP_ADDRESS_V6:-}" \
@@ -874,7 +885,7 @@ write_config(){
     {tag:"dns-remote", address:"https://1.1.1.1/dns-query", detour:"direct"},
     {address:"tls://dns.google", detour:"direct"}
   ],
-  strategy:"prefer_ipv6"
+  strategy:$DNS_STRATEGY
 },
     inbounds:[
       (inbound_vless_flow($P1) + {tag:"vless-reality"}),
