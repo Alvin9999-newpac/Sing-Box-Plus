@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  Sing-Box-Plus 管理脚本（18 节点：直连 9 + WARP 9）
-#  Version: v3.0.0
+#  Version: v3.1.0
 #  author：Alvin9999
 #  Repo: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 # ============================================================
@@ -274,10 +274,6 @@ WGCF_DIR=${WGCF_DIR:-$SB_DIR/wgcf}
 
 # 功能开关（保持稳定默认）
 ENABLE_WARP=${ENABLE_WARP:-true}
-# WARP 后端：强制使用官方 warp-cli（proxy 模式，sing-box 走本地 SOCKS5）
-WARP_BACKEND=${WARP_BACKEND:-warp-cli}
-WARP_SOCKS_HOST=${WARP_SOCKS_HOST:-127.0.0.1}
-WARP_SOCKS_PORT=${WARP_SOCKS_PORT:-40000}
 ENABLE_VLESS_REALITY=${ENABLE_VLESS_REALITY:-true}
 ENABLE_VLESS_GRPCR=${ENABLE_VLESS_GRPCR:-true}
 ENABLE_TROJAN_REALITY=${ENABLE_TROJAN_REALITY:-true}
@@ -290,7 +286,7 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
-SCRIPT_VERSION="v3.0.0"
+SCRIPT_VERSION="v2.4.7"
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
 REALITY_SERVER_PORT=${REALITY_SERVER_PORT:-443}
 GRPC_SERVICE=${GRPC_SERVICE:-grpc}
@@ -562,69 +558,9 @@ ensure_creds(){
   save_creds
 }
 
-
-# ===== WARP（官方 warp-cli，proxy 模式）=====
-install_warpcli(){
-  command -v warp-cli >/dev/null 2>&1 && return 0
-
-  if command -v apt-get >/dev/null 2>&1; then
-    ensure_deps curl gpg lsb_release || true
-    # GPG key
-    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
-    # repo
-    local codename
-    codename="$(lsb_release -cs 2>/dev/null || echo focal)"
-    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ ${codename} main" \
-      > /etc/apt/sources.list.d/cloudflare-client.list
-    apt-get update -y
-    apt-get install -y cloudflare-warp
-  elif command -v dnf >/dev/null 2>&1; then
-    curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo
-    dnf install -y cloudflare-warp
-  elif command -v yum >/dev/null 2>&1; then
-    curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo
-    yum install -y cloudflare-warp
-  else
-    warn "未识别的包管理器，无法自动安装 cloudflare-warp（warp-cli）"
-    return 1
-  fi
-
-  command -v warp-cli >/dev/null 2>&1
-}
-
-ensure_warpcli_proxy(){
-  [[ "${ENABLE_WARP:-true}" == "true" ]] || return 0
-
-  install_warpcli || { warn "warp-cli 安装失败，禁用 WARP 节点"; ENABLE_WARP=false; save_env; return 0; }
-
-  systemctl enable --now warp-svc >/dev/null 2>&1 || true
-
-  # 已注册就跳过（避免重复交互）
-  warp-cli registration show >/dev/null 2>&1 || {
-    info "开始注册 WARP（会提示接受服务条款，输入 y）"
-    warp-cli registration new || { warn "WARP 注册失败，禁用 WARP 节点"; ENABLE_WARP=false; save_env; return 0; }
-  }
-
-  # 关键：proxy 模式（不会改系统默认路由）
-  warp-cli mode proxy >/dev/null 2>&1 || true
-
-  # 尝试设置代理端口（不同版本命令可能不同，失败则使用默认 40000）
-  warp-cli proxy port "${WARP_SOCKS_PORT}" >/dev/null 2>&1 || true
-
-  warp-cli connect >/dev/null 2>&1 || true
-
-  # 健康检查：本机 socks5 是否可用（失败不直接退出，但会提示）
-  if curl -fsSL --proxy "socks5://${WARP_SOCKS_HOST}:${WARP_SOCKS_PORT}" https://cloudflare.com/cdn-cgi/trace 2>/dev/null | grep -q "warp=on"; then
-    info "WARP 代理已就绪：socks5://${WARP_SOCKS_HOST}:${WARP_SOCKS_PORT}"
-  else
-    warn "WARP 代理检测未通过（仍会继续部署）。可手动运行：warp-cli status / systemctl status warp-svc"
-  fi
-}
-
-
 # ===== WARP（wgcf） =====
 WGCF_BIN=/usr/local/bin/wgcf
-install_wgcf(){
+install_wgcf_disabled(){
   [[ -x "$WGCF_BIN" ]] && return 0
   local GOA url tmp
   case "$(arch_map)" in
@@ -654,8 +590,88 @@ pad_b64(){
 }
 
 
-# ===== WARP（wgcf）配置生成/修复 =====
-ensure_warp_profile(){
+# ===== WARP（官方 warp-cli，proxy 模式）一键安装/修复 =====
+# 说明：
+# - 本脚本强制使用官方 cloudflare-warp (warp-cli) 提供本地 SOCKS5 (默认 127.0.0.1:40000)
+# - sing-box 的 tag=warp 出站固定走该 SOCKS5
+WARP_SOCKS_HOST="${WARP_SOCKS_HOST:-127.0.0.1}"
+WARP_SOCKS_PORT="${WARP_SOCKS_PORT:-40000}"
+
+install_warpcli(){
+  command -v warp-cli >/dev/null 2>&1 && return 0
+
+  if command -v apt-get >/dev/null 2>&1; then
+    info "安装 cloudflare-warp (Debian/Ubuntu)..."
+    apt-get update -y
+    apt-get install -y curl gpg lsb-release ca-certificates >/dev/null 2>&1 || true
+    curl -fsSL https://pkg.cloudflareclient.com/pubkey.gpg | gpg --yes --dearmor -o /usr/share/keyrings/cloudflare-warp-archive-keyring.gpg
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-warp-archive-keyring.gpg] https://pkg.cloudflareclient.com/ $(lsb_release -cs) main"       > /etc/apt/sources.list.d/cloudflare-client.list
+    apt-get update -y
+    apt-get install -y cloudflare-warp
+  elif command -v yum >/dev/null 2>&1 || command -v dnf >/dev/null 2>&1; then
+    info "安装 cloudflare-warp (CentOS/RHEL)..."
+    curl -fsSl https://pkg.cloudflareclient.com/cloudflare-warp-ascii.repo | tee /etc/yum.repos.d/cloudflare-warp.repo >/dev/null
+    if command -v dnf >/dev/null 2>&1; then
+      dnf install -y cloudflare-warp
+    else
+      yum install -y cloudflare-warp
+    fi
+  else
+    err "未识别的包管理器，无法自动安装 cloudflare-warp"
+    return 1
+  fi
+
+  command -v warp-cli >/dev/null 2>&1
+}
+
+ensure_warpcli_proxy(){
+  [[ "${ENABLE_WARP:-true}" == "true" ]] || return 0
+
+  install_warpcli || return 1
+
+  systemctl enable --now warp-svc >/dev/null 2>&1 || true
+
+  # 已注册则跳过；未注册则自动同意条款
+  warp-cli registration show >/dev/null 2>&1 || {
+    info "WARP 首次注册需要接受条款，自动输入 y ..."
+    yes y | warp-cli registration new >/dev/null 2>&1 || return 1
+  }
+
+  # proxy 模式：不改系统默认路由
+  warp-cli mode proxy >/dev/null 2>&1 || true
+
+  # 连接
+  warp-cli connect >/dev/null 2>&1 || return 1
+
+  # 等待 socks 端口监听
+  for i in {1..12}; do
+    if ss -lntp 2>/dev/null | grep -q ":${WARP_SOCKS_PORT}\b" || netstat -lntp 2>/dev/null | grep -q ":${WARP_SOCKS_PORT}\b"; then
+      break
+    fi
+    sleep 1
+  done
+
+  if !( ss -lntp 2>/dev/null | grep -q ":${WARP_SOCKS_PORT}\b" || netstat -lntp 2>/dev/null | grep -q ":${WARP_SOCKS_PORT}\b" ); then
+    err "WARP SOCKS5 端口 ${WARP_SOCKS_PORT} 未监听（warp-svc/warp-cli 可能未正常工作）"
+    systemctl status warp-svc --no-pager | head -80 || true
+    journalctl -u warp-svc -n 120 --no-pager || true
+    return 1
+  fi
+
+  # 真正测试 warp=on
+  if ! curl -fsSL --proxy "socks5://${WARP_SOCKS_HOST}:${WARP_SOCKS_PORT}" https://cloudflare.com/cdn-cgi/trace | grep -q "warp=on"; then
+    err "WARP 代理测试失败：未检测到 warp=on"
+    warp-cli status || true
+    return 1
+  fi
+
+  ok "WARP proxy 已就绪：socks5://${WARP_SOCKS_HOST}:${WARP_SOCKS_PORT}"
+  return 0
+}
+
+# ===== WARP（wgcf）配置生成/修复（已废弃/不再默认使用，保留旧代码以兼容历史） =====
+
+ensure_wgcf_profile(){
   [[ "${ENABLE_WARP:-true}" == "true" ]] || return 0
 
   # 先尝试读取旧 env，并做一次规范化补齐
@@ -672,7 +688,7 @@ ensure_warp_profile(){
   fi
 
   # 走到这里说明旧 env 不完整；开始用 wgcf 重建
-  install_wgcf || { warn "wgcf 安装失败，禁用 WARP 节点"; ENABLE_WARP=false; save_env; return 0; }
+  install_wgcf_disabled || { warn "wgcf 安装失败，禁用 WARP 节点"; ENABLE_WARP=false; save_env; return 0; }
 
   local wd="$SB_DIR/wgcf"; mkdir -p "$wd"
   if [[ ! -f "$wd/wgcf-account.toml" ]]; then
@@ -807,11 +823,12 @@ systemctl enable "${SYSTEMD_SERVICE}" >/dev/null 2>&1 || true
 write_config(){
   ensure_dirs; load_env || true; load_creds || true; load_ports || true
   ensure_creds; save_all_ports; mk_cert
-  [[ "$ENABLE_WARP" == "true" ]] && ensure_warp_profile || true
+  [[ "$ENABLE_WARP" == "true" ]] && ensure_warpcli_proxy
 
   local CRT="$CERT_DIR/fullchain.pem" KEY="$CERT_DIR/key.pem"
   jq -n \
   --arg RS "$REALITY_SERVER" --argjson RSP "${REALITY_SERVER_PORT:-443}" --arg UID "$UUID" \
+  --arg WSHOST "$WARP_SOCKS_HOST" --argjson WSPORT "$WARP_SOCKS_PORT" \
   --arg RPR "$REALITY_PRIV" --arg RPB "$REALITY_PUB" --arg SID "$REALITY_SID" \
   --arg HY2 "$HY2_PWD" --arg HY22 "$HY2_PWD2" --arg HY2O "$HY2_OBFS_PWD" \
   --arg GRPC "$GRPC_SERVICE" --arg VMWS "$VMESS_WS_PATH" --arg CRT "$CRT" --arg KEY "$KEY" \
@@ -823,7 +840,6 @@ write_config(){
   --argjson PW4 "$PORT_HY2_W" --argjson PW5 "$PORT_VMESS_WS_W" --argjson PW6 "$PORT_HY2_OBFS_W" \
   --argjson PW7 "$PORT_SS2022_W" --argjson PW8 "$PORT_SS_W" --argjson PW9 "$PORT_TUIC_W" \
   --arg ENABLE_WARP "$ENABLE_WARP" \
-    --arg WSHOST "$WARP_SOCKS_HOST" --argjson WSPORT "$WARP_SOCKS_PORT" \
   --arg WPRIV "${WARP_PRIVATE_KEY:-}" --arg WPPUB "${WARP_PEER_PUBLIC_KEY:-}" \
   --arg WHOST "${WARP_ENDPOINT_HOST:-}" --argjson WPORT "${WARP_ENDPOINT_PORT:-0}" \
   --arg W4 "${WARP_ADDRESS_V4:-}" --arg W6 "${WARP_ADDRESS_V6:-}" \
@@ -841,6 +857,7 @@ write_config(){
 
   def warp_outbound:
     {type:"socks", tag:"warp", server:$WSHOST, server_port:$WSPORT};
+
 
   {
     log:{level:"info", timestamp:true},
@@ -867,14 +884,14 @@ write_config(){
       (inbound_tuic($PW9) + {tag:"tuic-v5-warp"})
     ],
     outbounds: (
-      if $ENABLE_WARP=="true" then
+      if $ENABLE_WARP=="true" and ($WPRIV|length)>0 and ($WHOST|length)>0 then
         [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}, warp_outbound]
       else
         [{type:"direct", tag:"direct"}, {type:"block", tag:"block"}]
       end
     ),
     route: (
-      if $ENABLE_WARP=="true" then
+      if $ENABLE_WARP=="true" and ($WPRIV|length)>0 and ($WHOST|length)>0 then
         { default_domain_resolver:"dns-remote", rules:[
             { inbound: ["vless-reality-warp","vless-grpcr-warp","trojan-reality-warp","hy2-warp","vmess-ws-warp","hy2-obfs-warp","ss2022-warp","ss-warp","tuic-v5-warp"], outbound:"warp" }
           ],
@@ -1082,7 +1099,7 @@ menu(){
   set +e                                            # ← 关闭严格退出，避免中途被杀掉
   echo -e "${C_BLUE}[信息] 正在检查 sing-box 安装状态...${C_RESET}"
   install_singbox            || true
-  ensure_warp_profile        || true
+  ensure_warpcli_proxy        || true
   write_config               || { echo "[ERR] 生成配置失败"; }
   write_systemd              || true
   open_firewall              || true
