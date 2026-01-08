@@ -287,6 +287,8 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
 SCRIPT_VERSION="v3.1.1"
+# WARP 首次注册提示是否已显示（防止重复提示）
+WARP_REG_NOTICE_SHOWN=0
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
 REALITY_SERVER_PORT=${REALITY_SERVER_PORT:-443}
 GRPC_SERVICE=${GRPC_SERVICE:-grpc}
@@ -635,10 +637,13 @@ ensure_warpcli_proxy(){
   systemctl enable --now warp-svc >/dev/null 2>&1 || true
 
   # 已注册则跳过；未注册则自动同意条款
-  warp-cli registration show >/dev/null 2>&1 || {
-    info "WARP 首次注册需要接受条款，自动输入 y ..."
+   warp-cli registration show >/dev/null 2>&1 || {
+    if [[ "$WARP_REG_NOTICE_SHOWN" -eq 0 ]]; then
+        info "正在初始化 Cloudflare WARP（首次使用需同意服务条款）"
+        WARP_REG_NOTICE_SHOWN=1
+    fi
     yes y | warp-cli registration new >/dev/null 2>&1 || return 1
-  }
+}
 
   # proxy 模式：不改系统默认路由
   warp-cli mode proxy >/dev/null 2>&1 || true
