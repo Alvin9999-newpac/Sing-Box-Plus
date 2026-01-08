@@ -633,7 +633,7 @@ ensure_warpcli_proxy(){
 
   # 已注册则跳过；未注册则自动同意条款
   warp-cli registration show >/dev/null 2>&1 || {
-    info "WARP 首次注册需要接受条款，自动输入 y ..."
+    info "正在初始化 Cloudflare WARP"
     yes y | warp-cli registration new >/dev/null 2>&1 || return 1
   }
 
