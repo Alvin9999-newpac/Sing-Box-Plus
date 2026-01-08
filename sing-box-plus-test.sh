@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # ============================================================
 #  Sing-Box-Plus 管理脚本（18 节点：直连 9 + WARP 9）
-#  Version: v3.1.3
+#  Version: v3.1.4
 #  author：Alvin9999
 #  Repo: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 # ============================================================
@@ -286,7 +286,7 @@ ENABLE_TUIC=${ENABLE_TUIC:-true}
 
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
-SCRIPT_VERSION="v3.1.3"
+SCRIPT_VERSION="v3.1.4"
 # WARP 首次注册提示是否已显示（防止重复提示）
 WARP_REG_NOTICE_SHOWN=0
 REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
