@@ -287,11 +287,11 @@ ENABLE_ANYTLS=${ENABLE_ANYTLS:-true}
 # 常量
 SCRIPT_NAME="Sing-Box-Plus 管理脚本"
 SCRIPT_VERSION="v4.7.0"
-REALITY_SERVER=${REALITY_SERVER:-www.microsoft.com}
+REALITY_SERVER=${REALITY_SERVER:-swift.org}
 REALITY_SERVER_PORT=${REALITY_SERVER_PORT:-443}
 # REALITY 偷域名池：每个 reality inbound 安装时各自随机抽一个，抽中后写入 creds.env 持久化，
 # 重启/重装不会变（不会让旧客户端链接失效）。空格分隔，全部需满足 TLS1.3 + H2、不重定向、未被墙。
-REALITY_SERVERS=${REALITY_SERVERS:-"swift.org yahoo.com www.yahoo.com addons.mozilla.org lovelive-anime.jp www.lovelive-anime.jp one-piece.com www.one-piece.com www.microsoft.com www.apple.com gateway.icloud.com"}
+REALITY_SERVERS=${REALITY_SERVERS:-"swift.org yahoo.com www.yahoo.com addons.mozilla.org lovelive-anime.jp www.lovelive-anime.jp one-piece.com www.one-piece.com www.apple.com gateway.icloud.com"}
 GRPC_SERVICE=${GRPC_SERVICE:-grpc}
 VMESS_WS_PATH=${VMESS_WS_PATH:-/vm}
 
