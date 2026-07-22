@@ -10,7 +10,7 @@
 * ✅ WARP 节点，将服务器 IP "变身" 为 Cloudflare 的中性出口，Gemini/Netflix/Disney+/YouTube 等流媒体解锁
 * ✅ **新增 AnyTLS 协议**（直连 + WARP 各一个），抗流量分析能力更强
 
-**🔔 2026年7月22日更新：** 修复hysteria2的2个pinnedPeerCertSha256节点链接，适配 Xray-core v26.2.6+ 移除 allowInsecure 后旧节点无法启动的问题（自 2026-06-01 起生效）。
+**🔔 2026年7月22日更新：** 修复hysteria2的2个pinnedPeerCertSha256节点链接，修复导入v2rayN软件中后证书指纹无法显示的问题。
 
 ---
 
