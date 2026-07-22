@@ -10,7 +10,7 @@
 * ✅ WARP 节点，将服务器 IP "变身" 为 Cloudflare 的中性出口，Gemini/Netflix/Disney+/YouTube 等流媒体解锁
 * ✅ **新增 AnyTLS 协议**（直连 + WARP 各一个），抗流量分析能力更强
 
-**🔔 2026年6月17日更新提醒：** 搭建好后最下面的hysteria2 节点改用 pinnedPeerCertSha256，适配 Xray-core v26.2.6+ 移除 allowInsecure 后旧节点无法启动的问题（自 2026-06-01 起生效）。若新节点在 v2rayN  下仍连不上，可在 v2rayN 中把该节点内核切回 sing-box / 原生 Hysteria2。
+**🔔 2026年7月22日更新：** 修复hysteria2的2个pinnedPeerCertSha256节点链接，适配 Xray-core v26.2.6+ 移除 allowInsecure 后旧节点无法启动的问题（自 2026-06-01 起生效）。
 
 ---
 
@@ -71,7 +71,7 @@ curl -fsSL -o sing-box-plus.sh https://raw.githubusercontent.com/Alvin9999-newpa
 ## 🧭 功能菜单
 
 ```text
- 🚀 Sing-Box-Plus 管理脚本 v4.7.0 🚀
+ 🚀 Sing-Box-Plus 管理脚本 v4.8.0 🚀
  脚本更新地址: https://github.com/Alvin9999-newpac/Sing-Box-Plus
 =============================================================
 系统加速状态：已启用 / 未启用 BBR
@@ -94,6 +94,7 @@ Sing-Box 启动状态：运行中 / 未运行 / 未安装
 
 | 版本    | 日期     | 变更 |
 |--------|----------|------|
+| v4.8.0 | 2026-07  | 修复hysteria2的2个pinnedPeerCertSha256节点链接 |
 | v4.7.0 | 2026-06  | reality协议节点增加多个域名，随机选择 |
 | v4.6.0 | 2026-05  | 新增 AnyTLS 协议节点（直连 + WARP），节点总数 18 → 20 |
 | v4.5.0 | 2026-05  | 固定 sing-box 版本为 v1.13.7 |
