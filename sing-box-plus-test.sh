@@ -562,8 +562,8 @@ mk_cert(){
       -keyout "$key" -out "$crt" -subj "/CN=$REALITY_SERVER" \
       -addext "subjectAltName=DNS:$REALITY_SERVER" >/dev/null 2>&1
   fi
-    CRT_SHA256=$(openssl x509 -in "$crt" -fingerprint -sha256 -noout \
-    | sed 's/SHA256 Fingerprint=//;s/://g' | tr 'A-F' 'a-f')
+CRT_SHA256=$(openssl x509 -in "$crt" -fingerprint -sha256 -noout \
+  | sed 's/.*Fingerprint=//;s/://g' | tr 'A-F' 'a-f')
 }
 
 ensure_creds(){
